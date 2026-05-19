@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torre de Control Claro | Social Intelligence</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .page-section { display: none; animation: fadeIn 0.4s ease; }
+        .page-section.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .action-btn {
+            background: var(--claro-red);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 10px;
+        }
+        .action-btn:hover { transform: scale(1.05); filter: brightness(1.1); }
+        
+        .refresh-btn {
+            background: rgba(255,255,255,0.05);
+            color: var(--text-secondary);
+            border: 1px solid rgba(255,255,255,0.1);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+        .refresh-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-container">
+                <div class="logo-icon">C</div>
+                <h2 style="font-size: 1.2rem; font-weight: 700;">Claro ECU</h2>
+            </div>
+            
+            <nav class="nav-menu">
+                <div class="nav-item active" onclick="window.switchPage('central')">
+                    <span>🏠</span> Dashboard Central
+                </div>
+                <div class="nav-item" onclick="window.switchPage('competencia')">
+                    <span>⚔️</span> Competencia
+                </div>
+                <div class="nav-item" onclick="window.switchPage('crisis')">
+                    <span>🚨</span> Crisis & Quejas
+                </div>
+                <div class="nav-item" onclick="window.switchPage('leads')">
+                    <span>💰</span> Leads de Ventas
+                </div>
+            </nav>
+
+            <div style="margin-top: auto; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px;">
+                <p style="font-size: 0.75rem; color: var(--text-secondary);">Estado del Sistema</p>
+                <p style="font-size: 0.85rem; color: var(--positive);">● Actualización Automática: 5m</p>
+                <p style="font-size: 0.85rem; color: var(--accent-blue);">● Conectado a X (Abril 2026)</p>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard Area -->
+        <main class="main-content">
+            <header class="header">
+                <div class="header-title">
+                    <h1>Torre de Control Digital</h1>
+                    <p id="dashboard-date">Cargando monitoreo estratégico...</p>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button class="refresh-btn" onclick="window.manualRefresh()">
+                        <span>🔄</span> Refrescar Datos
+                    </button>
+                    <select style="background: var(--card-bg); color: white; border: 1px solid rgba(255,255,255,0.1); padding: 8px 16px; border-radius: 8px;">
+                        <option>Todas las regiones</option>
+                        <option>Pichincha</option>
+                        <option>Guayas</option>
+                        <option>Azuay</option>
+                    </select>
+                </div>
+            </header>
+
+            <!-- KPI Row -->
+            <section class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-label">Menciones en X (24h)</div>
+                    <div class="kpi-value">
+                        <span id="kpi-mentions">---</span>
+                        <span class="kpi-trend trend-up">↑ 12%</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Sentimiento Positivo</div>
+                    <div class="kpi-value">
+                        <span id="kpi-sentiment">---%</span>
+                        <span class="kpi-trend trend-down">↓ 3%</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Leads de Portabilidad</div>
+                    <div class="kpi-value">
+                        <span id="kpi-sales">---</span>
+                        <span class="kpi-trend trend-up">↑ Activo</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Efectividad Venta</div>
+                    <div class="kpi-value">
+                        68%
+                        <span class="kpi-trend trend-up" style="background: rgba(74, 222, 128, 0.1); color: var(--positive);">Alta</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dashboard Central -->
+            <div id="page-central" class="page-section active">
+                <section class="charts-grid">
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3 class="chart-title">Batalla por el Mercado (Menciones X)</h3>
+                        </div>
+                        <div style="height: 250px;" id="competitorContainer">
+                            <canvas id="competitorChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3 class="chart-title">Pulso del Cliente</h3>
+                        </div>
+                        <div style="height: 250px;" id="sentimentContainer">
+                            <canvas id="sentimentChart"></canvas>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="bottom-grid">
+                    <div class="chart-card" style="height: 400px; display: flex; flex-direction: column;">
+                        <h3 class="chart-title" style="margin-bottom: 1rem;">Radar de Eventos Recientes</h3>
+                        <div id="liveFeed" class="feed-card" style="flex: 1; margin: 0; padding: 0; background: transparent;">
+                            <!-- JS Populated -->
+                        </div>
+                    </div>
+                    <div class="chart-card" style="height: 400px;">
+                        <h3 class="chart-title">Mapa de Calor: Focos de Quejas</h3>
+                        <div id="mapContainer" style="height: 300px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.2); border-radius: 12px; margin-top: 10px;">
+                            <svg viewBox="0 0 200 150" style="width: 100%; height: 100%; max-width: 300px;">
+                                <path d="M50,30 L70,20 L110,25 L140,40 L150,70 L140,110 L100,130 L60,120 L30,90 Z" fill="rgba(238, 29, 35, 0.1)" stroke="var(--claro-red)" stroke-width="1"/>
+                                <circle cx="80" cy="50" r="8" fill="var(--claro-red)" opacity="0.6"><animate attributeName="r" values="8;12;8" dur="2s" repeatCount="indefinite" /></circle>
+                                <circle cx="120" cy="80" r="5" fill="var(--claro-red)" opacity="0.4"><animate attributeName="r" values="5;8;5" dur="3s" repeatCount="indefinite" /></circle>
+                                <text x="85" y="45" fill="white" font-size="8">Quito</text>
+                                <text x="125" y="75" fill="white" font-size="8">Guayaquil</text>
+                            </svg>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Full Dynamic Pages -->
+            <div id="page-competencia" class="page-section">
+                <div class="chart-card" style="min-height: 500px;">
+                    <!-- JS Populated -->
+                </div>
+            </div>
+            <div id="page-crisis" class="page-section">
+                <div class="chart-card" style="min-height: 500px;">
+                    <!-- JS Populated -->
+                </div>
+            </div>
+            <div id="page-leads" class="page-section">
+                <div class="chart-card" style="min-height: 500px;">
+                    <!-- JS Populated -->
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

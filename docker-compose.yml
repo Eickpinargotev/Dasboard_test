@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: social_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_REFRESH_INTERVAL_SECONDS=${REFRESH_INTERVAL_SECONDS:-900}
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: social_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      - KEEPCON_TOKEN=${KEEPCON_TOKEN:?Set KEEPCON_TOKEN in .env}
+      - KEEPCON_ACCOUNT_NUMBER=${KEEPCON_ACCOUNT_NUMBER:?Set KEEPCON_ACCOUNT_NUMBER in .env}
+      - REFRESH_INTERVAL_SECONDS=${REFRESH_INTERVAL_SECONDS:-900}
+      - SCRAPEBADGER_API=${SCRAPEBADGER_API}
+      - OPENAI_API=${OPENAI_API}
+      - SCRAPEBADGER_REFRESH_INTERVAL_SECONDS=${SCRAPEBADGER_REFRESH_INTERVAL_SECONDS:-86400}
+    restart: unless-stopped
+
+  api_tester:
+    build:
+      context: ./api_tester
+      dockerfile: Dockerfile
+    container_name: social_api_tester
+    volumes:
+      - ./api_tester:/app
+    environment:
+      - KEEPCON_TOKEN=${KEEPCON_TOKEN:?Set KEEPCON_TOKEN in .env}
+      - KEEPCON_ACCOUNT_NUMBER=${KEEPCON_ACCOUNT_NUMBER:?Set KEEPCON_ACCOUNT_NUMBER in .env}
+    # Mantener el contenedor vivo para poder entrar a la consola a hacer pruebas
+    command: tail -f /dev/null
