@@ -25,8 +25,10 @@ class KeepconService:
         csv_path = os.path.join(base_dir, 'data', 'keepcon_data.csv')
         self.storage = KeepconStorage(csv_path)
         self.sync_state_path = os.path.join(base_dir, 'data', 'keepcon_sync_state.json')
+        self.refresh_diagnostics_path = os.path.join(base_dir, 'data', 'keepcon_refresh_diagnostics.jsonl')
 
-    def fetch_data_from_api(self, from_date, to_date, mode="created", existing_by_id=None):
+    def fetch_data_from_api(self, from_date, to_date, mode="created", existing_by_id=None, analyze_ai=True):
+        started = time.perf_counter()
         all_results = []
         profile_cache = {}
         existing_analysis = self.storage.analysis_map()
@@ -34,12 +36,16 @@ class KeepconService:
         next_page_token = None
         pages = 0
         profile_calls = 0
+        keepcon_duration_ms = 0
+        profile_duration_ms = 0
         
         while True:
+            keepcon_started = time.perf_counter()
             if mode == "updated":
                 response_data = self.client.search_content_by_updated_at(from_date, to_date, next_page_token)
             else:
                 response_data = self.client.search_content(from_date, to_date, next_page_token)
+            keepcon_duration_ms += int((time.perf_counter() - keepcon_started) * 1000)
             if not response_data:
                 break
             pages += 1
@@ -64,7 +70,9 @@ class KeepconService:
                             processed.update(existing_profiles[profile_key])
                         elif self._should_fetch_profile(processed, item, is_existing):
                             if profile_key not in profile_cache:
+                                profile_started = time.perf_counter()
                                 profile_cache[profile_key] = self.client.get_profile(*profile_key)
+                                profile_duration_ms += int((time.perf_counter() - profile_started) * 1000)
                                 profile_calls += 1
                             processed = self.processor.enrich_with_profile(processed, profile_cache[profile_key])
                     all_results.append(processed)
@@ -78,24 +86,41 @@ class KeepconService:
             if not next_page_token:
                 break
 
-        missing_ai = [item for item in all_results if not item.get("ai_sentiment")]
-        ai_results = self.ai_analyzer.analyze_missing(missing_ai)
-        for item in all_results:
-            if item["id"] in ai_results:
-                item.update(ai_results[item["id"]])
+        if analyze_ai:
+            ai_analysis = self._analyze_records(all_results)
+        else:
+            ai_analysis = self._empty_ai_analysis()
 
-        return {"records": all_results, "pages": pages, "profile_calls": profile_calls}
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "records": all_results,
+            "pages": pages,
+            "profile_calls": profile_calls,
+            "diagnostics": {
+                "mode": mode,
+                "records": len(all_results),
+                "pages": pages,
+                "keepcon_duration_ms": keepcon_duration_ms,
+                "profile_calls": profile_calls,
+                "profile_duration_ms": profile_duration_ms,
+                "ai": ai_analysis["stats"],
+                "duration_ms": duration_ms,
+            },
+        }
 
     def refresh_latest(self, days_filter=1):
         """Fetch latest Keepcon records for the active period and update mutable status fields."""
         started = time.perf_counter()
         now = datetime.now()
         from_date = now - timedelta(days=days_filter)
+        diagnostics = {"stages": {}}
         sync_state = self._load_sync_state()
         created_from = self._parse_datetime(sync_state.get("last_created_at_sync")) or from_date
         updated_from = self._parse_datetime(sync_state.get("last_updated_at_sync"))
         logger.info(f"Refreshing Keepcon data from {from_date} to {now}...")
+        load_started = time.perf_counter()
         existing_df = self.storage.load_data()
+        diagnostics["stages"]["load_csv_ms"] = int((time.perf_counter() - load_started) * 1000)
         existing_by_id = {}
         if not existing_df.empty:
             existing_by_id = {
@@ -104,30 +129,64 @@ class KeepconService:
                 if row.get("id")
             }
 
-        created_result = self.fetch_data_from_api(created_from, now, mode="created", existing_by_id=existing_by_id)
+        created_started = time.perf_counter()
+        created_result = self.fetch_data_from_api(created_from, now, mode="created", existing_by_id=existing_by_id, analyze_ai=False)
+        diagnostics["stages"]["created_fetch_ms"] = int((time.perf_counter() - created_started) * 1000)
         updated_result = {"records": [], "pages": 0, "profile_calls": 0}
         if updated_from:
-            updated_result = self.fetch_data_from_api(updated_from, now, mode="updated", existing_by_id=existing_by_id)
+            updated_started = time.perf_counter()
+            updated_result = self.fetch_data_from_api(updated_from, now, mode="updated", existing_by_id=existing_by_id, analyze_ai=False)
+            diagnostics["stages"]["updated_fetch_ms"] = int((time.perf_counter() - updated_started) * 1000)
+        else:
+            diagnostics["stages"]["updated_fetch_ms"] = 0
         if self.client.last_error:
             raise RuntimeError(self.client.last_error)
 
         results = self._merge_records(created_result["records"], updated_result["records"])
+        ai_started = time.perf_counter()
+        ai_analysis = self._analyze_records(results)
+        diagnostics["stages"]["ai_analysis_ms"] = int((time.perf_counter() - ai_started) * 1000)
+        count_started = time.perf_counter()
         update_counts = self._count_update_types(existing_by_id, results)
+        diagnostics["stages"]["count_updates_ms"] = int((time.perf_counter() - count_started) * 1000)
+        save_started = time.perf_counter()
         new_count = self.storage.save_data(results)
+        diagnostics["stages"]["save_csv_ms"] = int((time.perf_counter() - save_started) * 1000)
         duration_ms = int((time.perf_counter() - started) * 1000)
+        diagnostics["created"] = created_result["diagnostics"]
+        diagnostics["updated"] = updated_result.get("diagnostics", {
+            "mode": "updated",
+            "records": 0,
+            "pages": 0,
+            "keepcon_duration_ms": 0,
+            "profile_calls": 0,
+            "profile_duration_ms": 0,
+            "ai": {"pending_records": 0, "chunks": 0, "analyzed_records": 0, "duration_ms": 0},
+            "duration_ms": 0,
+        })
+        diagnostics["ai"] = ai_analysis["stats"]
+        diagnostics["totals"] = {
+            "keepcon_duration_ms": diagnostics["created"]["keepcon_duration_ms"] + diagnostics["updated"]["keepcon_duration_ms"],
+            "profile_duration_ms": diagnostics["created"]["profile_duration_ms"] + diagnostics["updated"]["profile_duration_ms"],
+            "ai_duration_ms": diagnostics["ai"]["duration_ms"],
+            "ai_pending_records": diagnostics["ai"]["pending_records"],
+            "ai_chunks": diagnostics["ai"]["chunks"],
+            "duration_ms": duration_ms,
+        }
         self._save_sync_state({
             "last_created_at_sync": now.isoformat(),
             "last_updated_at_sync": now.isoformat(),
             "last_successful_refresh_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info(
-            "Refresh complete. Added %s new, status %s, metadata %s, profile %s.",
+            "Refresh complete. Added %s new, status %s, metadata %s, profile %s. Diagnostics: %s",
             new_count,
             update_counts["status_updates"],
             update_counts["metadata_updates"],
             update_counts["profile_updates"],
+            diagnostics,
         )
-        return {
+        response = {
             "new_records": new_count,
             **update_counts,
             "updated_records": update_counts["status_updates"] + update_counts["metadata_updates"] + update_counts["profile_updates"],
@@ -136,8 +195,11 @@ class KeepconService:
             "updated_pages": updated_result["pages"],
             "profile_calls": created_result["profile_calls"] + updated_result["profile_calls"],
             "duration_ms": duration_ms,
+            "diagnostics": diagnostics,
             "last_successful_refresh_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._append_refresh_diagnostics(response)
+        return response
 
     def get_dashboard_data(self, days_filter=1, sentiment_filter=None, source_filter=None, influencer_filter=None):
         now = datetime.now(pytz.utc)
@@ -304,6 +366,23 @@ class KeepconService:
         }
         return diagnostics
 
+    def get_refresh_diagnostics(self, limit=10):
+        if not os.path.exists(self.refresh_diagnostics_path):
+            return []
+        try:
+            with open(self.refresh_diagnostics_path, "r", encoding="utf-8") as file_obj:
+                lines = [line.strip() for line in file_obj if line.strip()]
+            entries = []
+            for line in lines[-limit:]:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            return entries
+        except Exception as exc:
+            logger.warning("Could not read Keepcon refresh diagnostics: %s", exc)
+            return []
+
     def _count_sentiment(self, data, field, sentiment):
         return sum(1 for item in data if (item.get(field) or "").lower() == sentiment)
 
@@ -426,6 +505,46 @@ class KeepconService:
                 if record.get("id"):
                     merged[str(record["id"])] = record
         return list(merged.values())
+
+    def _empty_ai_analysis(self):
+        return {
+            "results": {},
+            "stats": {
+                "pending_records": 0,
+                "chunks": 0,
+                "analyzed_records": 0,
+                "duration_ms": 0,
+            },
+        }
+
+    def _analyze_records(self, records):
+        missing_ai = [item for item in records if not item.get("ai_sentiment")]
+        ai_analysis = self.ai_analyzer.analyze_missing_with_stats(missing_ai)
+        ai_results = ai_analysis["results"]
+        for item in records:
+            item_id = str(item.get("id") or "")
+            if item_id in ai_results:
+                item.update(ai_results[item_id])
+        return ai_analysis
+
+    def _append_refresh_diagnostics(self, response):
+        try:
+            os.makedirs(os.path.dirname(self.refresh_diagnostics_path), exist_ok=True)
+            entry = {
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "new_records": response.get("new_records", 0),
+                "updated_records": response.get("updated_records", 0),
+                "fetched_records": response.get("fetched_records", 0),
+                "created_pages": response.get("created_pages", 0),
+                "updated_pages": response.get("updated_pages", 0),
+                "profile_calls": response.get("profile_calls", 0),
+                "duration_ms": response.get("duration_ms", 0),
+                "diagnostics": response.get("diagnostics", {}),
+            }
+            with open(self.refresh_diagnostics_path, "a", encoding="utf-8") as file_obj:
+                file_obj.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            logger.warning("Could not append Keepcon refresh diagnostics: %s", exc)
 
     def _persist_ai_results(self, ai_results):
         if not ai_results:

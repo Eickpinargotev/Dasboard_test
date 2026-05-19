@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -58,22 +59,36 @@ class KeepconAIAnalyzer:
     )
 
     def analyze_missing(self, records):
+        return self.analyze_missing_with_stats(records)["results"]
+
+    def analyze_missing_with_stats(self, records):
+        started = time.perf_counter()
         pending = [
             {"id": item["id"], "text": item.get("text", "")}
             for item in records
             if item.get("id") and not item.get("ai_sentiment")
         ]
+        stats = {
+            "pending_records": len(pending),
+            "chunks": 0,
+            "analyzed_records": 0,
+            "duration_ms": 0,
+        }
         if not pending:
-            return {}
+            return {"results": {}, "stats": stats}
 
         if not self.config.openai_api_key:
             logger.warning("No OpenAI API key found. Leaving Keepcon AI analysis empty.")
-            return {}
+            stats["duration_ms"] = int((time.perf_counter() - started) * 1000)
+            return {"results": {}, "stats": stats}
 
         analyzed = {}
         for index in range(0, len(pending), self.config.openai_sync_chunk_size):
+            stats["chunks"] += 1
             analyzed.update(self._analyze_chunk(pending[index:index + self.config.openai_sync_chunk_size]))
-        return analyzed
+        stats["analyzed_records"] = len(analyzed)
+        stats["duration_ms"] = int((time.perf_counter() - started) * 1000)
+        return {"results": analyzed, "stats": stats}
 
     def _payload(self, pending):
         return {

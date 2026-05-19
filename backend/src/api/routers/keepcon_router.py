@@ -5,6 +5,9 @@ from src.services.keepcon import KeepconService
 router = APIRouter()
 service = KeepconService()
 
+def _seconds(milliseconds):
+    return round((milliseconds or 0) / 1000, 2)
+
 @router.get("/data")
 def get_keepcon_data(
     days: int = Query(1, description="Días hacia atrás a consultar"),
@@ -57,6 +60,16 @@ def refresh_keepcon_data(
             )
         else:
             message = "Keepcon actualizado: no se encontraron registros nuevos ni cambios de estado."
+        diagnostics = result.get("diagnostics", {})
+        totals = diagnostics.get("totals", {})
+        if totals:
+            message = (
+                f"{message} Tiempo total: {_seconds(totals.get('duration_ms'))}s "
+                f"(Keepcon: {_seconds(totals.get('keepcon_duration_ms'))}s, "
+                f"IA: {_seconds(totals.get('ai_duration_ms'))}s, "
+                f"perfiles: {_seconds(totals.get('profile_duration_ms'))}s, "
+                f"pendientes IA: {totals.get('ai_pending_records', 0)})."
+            )
         return {"status": "success", "message": message, **result}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -74,3 +87,16 @@ def diagnose_keepcon_content(
         return {"status": "success", **service.diagnose_content(content_id=content_id, created_at=created_at)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@router.get("/diagnostics/refreshes")
+def get_keepcon_refresh_diagnostics(
+    limit: int = Query(10, ge=1, le=100, description="Cantidad de refreshes recientes a devolver")
+):
+    """
+    Devuelve el historial local de tiempos de refresh.
+    No llama a Keepcon ni recalcula sentimiento.
+    """
+    try:
+        return {"status": "success", "data": service.get_refresh_diagnostics(limit=limit)}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "data": []}
